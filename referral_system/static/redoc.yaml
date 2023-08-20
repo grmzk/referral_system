@@ -1,0 +1,273 @@
+openapi: 3.0.2
+info:
+  title: 'Referral System API'
+  version: ''
+  description: |
+    запросы к API начинаются с `/api/`
+    # Описание
+    **Referral System API** реализует простую реферальную систему.
+    # Алгоритм получения доступа
+    1. Пользователь отправляет POST-запрос на эндпоинт `/api/auth/signup/` с параметром `username` (в качестве `username` используется телефонный номер. Например: `+01234567890`).
+    2. **Referral System API** отправляет письмо с кодом аутентификации (`auth_code`) на указанный телефонный номер посредством SMS. В данной версии генерирование кода и отправка SMS имитируется, **для всех используется единый код `0000`**.
+    3. Пользователь отправляет POST-запрос с параметрами `username` (телефонный номер) и `auth_code` на эндпоинт `/api/auth/login/`, в ответе на запрос ему приходит `token` (JWT-токен).
+    4. При желании пользователь отправляет PATCH-запрос на эндпоинт `/api/users/me/` с параметром `referrer_invite_code` для указания пригласившего его пользователя.
+    # Права пользователей
+    - Все пользователи, включая пользователя **Аноним**, — могут просматривать профили других пользователей.
+    - **Аутентифицированный пользователь** (`user`) — может указать пригласившего его пользователя посредством PATCH-запроса на эндпоинт `/api/users/me/` с параметром `referrer_invite_code`, либо посмотреть свой профиль посредством GET-запроса на эндпоинт `/api/users/me/`.
+servers:
+  - url: /api/
+
+tags:
+  - name: AUTH
+    description: Регистрация пользователей и выдача токенов
+  - name: USERS
+    description: Пользователи
+
+paths:
+  /auth/signup/:
+    post:
+      tags:
+        - AUTH
+      operationId: Получение кода аутентификации
+      description: |
+        Получить `auth_code` на переданный телефонный номер в параметре `username`.
+        Права доступа: **Доступно без токена.**
+        Формат параметра `username`: `+AAAAAAAAAAA`, где A - это цифра. Например: `+01234567890`.
+      parameters: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              required:
+                - username
+              properties:
+                username:
+                  type: string
+                  pattern: ^\+\d{11}$
+                  maxLength: 12
+                  minLength: 12
+      responses:
+        200:
+          content:
+            application/json:
+              schema:
+                properties:
+                  username:
+                    type: string
+          description: 'Удачное выполнение запроса (пользователь уже есть в БД)'
+        201:
+          content:
+            application/json:
+              schema:
+                properties:
+                  username:
+                    type: string
+          description: 'Удачное выполнение запроса (новый пользователь добавлен в БД)'
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError'
+          description: 'Отсутствует обязательное поле или оно некорректно'
+
+  /auth/login/:
+    post:
+      tags:
+        - AUTH
+      operationId: Получение JWT-токена
+      description: |
+        Получение JWT-токена в обмен на username и auth_code.
+        Права доступа: **Доступно без токена**
+      requestBody:
+        content:
+          application/json:
+            schema:
+              required:
+                - username
+                - auth_code
+              properties:
+                username:
+                  type: string
+                  pattern: ^\+\d{11}$
+                  maxLength: 12
+                  minLength: 12
+                auth_code:
+                  type: string
+                  description: В данной версии генерирование кода и отправка SMS имитируется, **для всех используется единый код `0000`**.
+                  writeOnly: true
+      responses:
+        200:
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Token'
+          description: 'Удачное выполнение запроса'
+        400:
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError'
+          description: 'Отсутствует обязательное поле или оно некорректно'
+        404:
+          description: Пользователь не найден
+
+  /users/:
+    get:
+      tags:
+        - USERS
+      operationId: Получение списка всех пользователей
+      description: |
+        Получить список всех пользователей.
+        Права доступа: **Доступно без токена**
+      responses:
+        200:
+          description: Удачное выполнение запроса
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/User'
+
+  /users/{username}/:
+    parameters:
+      - name: username
+        in: path
+        required: true
+        description: Телефонный номер пользователя
+        schema:
+          type: string
+    get:
+      tags:
+        - USERS
+      operationId: Получение пользователя по username
+      description: |
+        Получить пользователя по username.
+        Права доступа: **Доступно без токена**
+      responses:
+        200:
+          description: Удачное выполнение запроса
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        404:
+          description: Пользователь не найден
+
+  /users/me/:
+    get:
+      tags:
+        - USERS
+      operationId: Получение данных своей учетной записи
+      description: |
+        Получить данные своей учетной записи
+        Права доступа: **Любой авторизованный пользователь**
+      responses:
+        200:
+          description: Удачное выполнение запроса
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        401:
+          description: Необходим JWT-токен
+      security:
+        - jwt-token:
+            - read:authorized_user
+    patch:
+      tags:
+        - USERS
+      operationId: Изменение данных своей учетной записи
+      description: |
+        Указать invite_code пригласившего пользователя
+        Права доступа: **Любой авторизованный пользователь**
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Me'
+      responses:
+        200:
+          description: Удачное выполнение запроса
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        400:
+          description: 'Отсутствует обязательное поле или оно некорректно'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError'
+        401:
+          description: Необходим JWT-токен
+      security:
+      - jwt-token:
+        - write:authorized_user
+
+components:
+  schemas:
+
+    User:
+      title: Пользователь
+      type: object
+      description: Информация о пользователе
+      required:
+          - username
+      properties:
+        username:
+          type: string
+          description: Телефонный номер пользователя в формате `+AAAAAAAAAAA`, где A - это цифра.
+          pattern: ^\+\d{11}$
+          maxLength: 12
+          minLength: 12
+        invite_code:
+          type: string
+          description: Код, который передается рефералам.
+          maxLength: 6
+          minLength: 6
+        referrer_invite_code:
+          type: string
+          description: Код, полученный от реферера (указан в поле invite_code в профиле реферрера).
+          maxLength: 6
+          minLength: 6
+        referrals:
+          type: array
+          items:
+            type: string
+            title: Телефонный номер реферала
+
+    ValidationError:
+      title: Ошибка валидации
+      type: object
+      properties:
+        field_name:
+          type: array
+          items:
+            type: string
+
+    Token:
+      title: Токен
+      type: object
+      properties:
+        token:
+          type: string
+          title: access токен
+
+    Me:
+      type: object
+      properties:
+        referrer_invite_code:
+          type: string
+          description: Код, полученный от реферера (указан в поле invite_code в профиле реферрера).
+          maxLength: 6
+          minLength: 6
+      required:
+      - referrer_invite_code
+
+  securitySchemes:
+    jwt-token:
+      type: apiKey
+      description: Используется аутентификация с использованием JWT-токенов
+      name: Bearer
+      in: header
